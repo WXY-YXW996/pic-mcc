@@ -10,7 +10,7 @@ import scipy
 
 
 mass = 9.1 * 10e-31 # unit: kg
-dt = 1e-8 # unit: s
+# dt = 1e-10 # unit: s
 f = 28e9 #28 GHz
 w = 2 * np.pi * f # unit: rad/s
 charge = 1.6 * 10e-19 # unit: C
@@ -28,7 +28,7 @@ def boris_pusher(vel, electric_field, magnetic_field, q_m, dt):
     return vel_new
 
 times = 0 
-Nt = 1000
+Nt = 10
 
 Np_electrons = 1
 Np_argon = 1
@@ -60,6 +60,20 @@ nx = 3
 ny = 3
 nz = 3
 
+def get_local_pos(global_pos):
+    local_pos = ((global_pos - box_min) / (box_max - box_min)) * np.array([nx, ny, nz])
+    local_pos = np.clip(local_pos, 0, np.array([nx-1, ny-1, nz-1]))  # Ensure indices are within bounds
+    return np.floor(local_pos).astype(int)
+
+def gather(field, loc_pos):
+    x, y, z = loc_pos
+    return field[x, y, z]
+
+def scatter(field, loc_pos, value):
+    x, y, z = loc_pos
+    field[x, y, z] += value
+    return field
+
 # 定义电场
 ex_r = np.zeros((nx,ny,nz))
 ey_r = np.zeros((nx,ny,nz))
@@ -70,15 +84,19 @@ ex_i = np.zeros((nx,ny,nz))
 ey_i = np.zeros((nx,ny,nz))
 ez_i = np.zeros((nx,ny,nz))
 
+e = np.zeros((nx,ny,nz,3))
+
+e[:,:,:,2] = 0.0 # V/m
 
 #定义磁场
 bx = np.zeros((nx,ny,nz))
 by = np.zeros((nx,ny,nz))
 bz = np.zeros((nx,ny,nz))
 
-bz[:, :] = 1
+b = np.zeros((nx,ny,nz,3))
 
-
+## 初始化磁场
+b[:,:,:,2] = 4 # Tesla
 
 # 初始化粒子
 ## 初始位置
@@ -102,11 +120,28 @@ ez = np.zeros((nx,ny,nz))
 positions_history = []
 vel_history = []
 
+
+b_mag = 4 # Tesla
+period = 1 / (charge * b_mag/ mass/ (2 * np.pi))
+print("cycltron frequency is ", 1/period, " Hz")
+print("period is ", period, " s")
+
+Nt = 166
+# dt = period / Nt
+dt = 5e-12
+# Nt = int(period / dt) + 1
+print("dt is ", dt, " s")
+
+
 for i in range (Nt):
-    electrons_vel[0] = boris_pusher(electrons_vel[0], np.array([0,0,0]), np.array([0,0,0.5]), charge/mass, dt)
-    electrons_pos += electrons_vel * dt
-    positions_history.append(electrons_pos.copy())
-    print(f"time {i}, vel_x is {electrons_vel[0][0]}, vel_y is {electrons_vel[0][1]}, vel_z is {electrons_vel[0][2]}")
+    for ip in range(Np_electrons):
+        loc_pos = get_local_pos(electrons_pos[ip])
+        e_loc = gather(e, loc_pos)
+        b_loc = gather(b, loc_pos)
+        electrons_vel[ip] = boris_pusher(electrons_vel[ip], e_loc, b_loc, charge/mass, dt)
+        electrons_pos += electrons_vel * dt
+        positions_history.append(electrons_pos.copy())
+        print(f"time {i}, vel_x is {electrons_vel[ip][0]}, vel_y is {electrons_vel[ip][1]}, vel_z is {electrons_vel[ip][2]}")
 
 
 
@@ -124,18 +159,19 @@ for i in range (Nt):
 # visualization
 positions_history = np.array(positions_history)  # Shape: (Nt, Np_electrons, 3)
 
-# 3D Plot trajectory of the first electron
+# 3D Scatter plot trajectory of the first electron
 fig = plt.figure(figsize=(8,6))
 ax = fig.add_subplot(111, projection='3d')
-ax.plot(
+ax.scatter(
     positions_history[:, 0, 0],  # x
     positions_history[:, 0, 1],  # y
     positions_history[:, 0, 2],  # z
-    label='Electron 0'
+    label='Electron 0',
+    s=20
 )
 ax.set_xlabel('x position (m)')
 ax.set_ylabel('y position (m)')
 ax.set_zlabel('z position (m)')
-ax.set_title('3D Trajectory of Electron 0')
+ax.set_title('3D Scatter Trajectory of Electron 0')
 ax.legend()
 plt.show()
