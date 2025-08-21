@@ -10,12 +10,12 @@ import scipy
 
 
 mass = 9.1 * 10e-31 # unit: kg
-dt = 1e-4 # unit: s
+dt = 1e-8 # unit: s
 f = 28e9 #28 GHz
 w = 2 * np.pi * f # unit: rad/s
 charge = 1.6 * 10e-19 # unit: C
 
-def boris_puhser(vel, electric_field, magnetic_field, q_m, dt):
+def boris_pusher(vel, electric_field, magnetic_field, q_m, dt):
     # Boris algorithm for velocity update
     v_minus = vel + electric_field * q_m * dt / 2
     t = magnetic_field * q_m * dt / 2
@@ -80,12 +80,14 @@ bz[:, :] = 1
 
 
 
-## 初始化粒子
-electrons_pos = np.random.rand(Np_electrons, 3) * (box_max - box_min) + box_min
+# 初始化粒子
+## 初始位置
+# electrons_pos = np.random.rand(Np_electrons, 3) * (box_max - box_min) + box_min
+electrons_pos = np.array([[0.0, 0.0, 0.0]])
 argons_1_pos = np.random.rand(Np_argon_1, 3) * (box_max - box_min) + box_min
 
-
-electrons_vel[:, 0] = 1000
+## 初始速度
+electrons_vel[0][0] = 100
 argons_vel[:, 0]= 1000
 argons_1_vel[:, 0] = 1000
 
@@ -98,11 +100,13 @@ ez = np.zeros((nx,ny,nz))
 
 # Store positions at each time step
 positions_history = []
+vel_history = []
 
 for i in range (Nt):
-    electrons_vel = boris_puhser(electrons_vel, np.array([0,0,0]), np.array([0,0,1]), charge / mass, dt)
+    electrons_vel[0] = boris_pusher(electrons_vel[0], np.array([0,0,0]), np.array([0,0,0.5]), charge/mass, dt)
     electrons_pos += electrons_vel * dt
     positions_history.append(electrons_pos.copy())
+    print(f"time {i}, vel_x is {electrons_vel[0][0]}, vel_y is {electrons_vel[0][1]}, vel_z is {electrons_vel[0][2]}")
 
 
 
