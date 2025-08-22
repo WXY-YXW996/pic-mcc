@@ -30,7 +30,7 @@ def boris_pusher(vel, electric_field, magnetic_field, q_m, dt):
 times = 0 
 Nt = 10
 
-Np_electrons = 1
+Np_electrons = 2
 Np_argon = 1
 Np_argon_1 = 1
 
@@ -53,25 +53,62 @@ argons_1_charge = 1
 
 
 # 定义几何
-box_min = np.array([0, 0, 0]) # unit: m
-box_max = np.array([10, 10, 10]) # unit: m
+box_min = np.array([0., 0., 0.]) # unit: m
+box_max = np.array([1., 1., 1.]) # unit: m
 
-nx = 3
-ny = 3
-nz = 3
+nx = 51
+ny = 51
+nz = 51
+
+ne_grid = np.zeros([nx, ny, nz])  # Number of grid points in each dimension
+    
 
 def get_local_pos(global_pos):
-    local_pos = ((global_pos - box_min) / (box_max - box_min)) * np.array([nx, ny, nz])
-    local_pos = np.clip(local_pos, 0, np.array([nx-1, ny-1, nz-1]))  # Ensure indices are within bounds
-    return np.floor(local_pos).astype(int)
+    local_pos = ((global_pos - box_min) / (box_max - box_min)) * np.array([nx-1., ny-1., nz-1.])
+    local_pos = np.clip(local_pos, 0.0, np.array([nx-1, ny-1, nz-1]))
+    return local_pos
+
+local_value_3d = 0
+local_value_4d = np.zeros((3))
 
 def gather(field, loc_pos):
-    x, y, z = loc_pos
-    return field[x, y, z]
+    ix, iy, iz = loc_pos.astype(int)
+    dx, dy, dz = loc_pos - np.array([ix, iy, iz])
+    # 使用线性插值来获取局部场值
+    if field.ndim == 3:
+        local_value_3d = 0
+        local_value_3d = field[ix, iy, iz] * (1 - dx) * (1 - dy) * (1 - dz) + \
+                    field[ix + 1, iy, iz] * dx * (1 - dy) * (1 - dz) + \
+                    field[ix, iy + 1, iz] * (1 - dx) * dy * (1 - dz) + \
+                    field[ix, iy, iz + 1] * (1 - dx) * (1 - dy) * dz + \
+                    field[ix + 1, iy + 1, iz] * dx * dy * (1 - dz) + \
+                    field[ix, iy + 1, iz + 1] * (1 - dx) * dy * dz + \
+                    field[ix + 1, iy, iz + 1] * dx * (1 - dy) * dz + \
+                    field[ix + 1, iy + 1, iz + 1] * dx * dy * dz
+        return local_value_3d
+    
+    elif field.ndim == 4:
+        local_value_4d = np.zeros(3)
+        local_value_4d[0] = gather(field[:, :, :, 0], loc_pos)
+        local_value_4d[1] = gather(field[:, :, :, 1], loc_pos)
+        local_value_4d[2] = gather(field[:, :, :, 2], loc_pos)
+        return local_value_4d
+    else:
+        raise ValueError("Field must be 3D or 4D array.")
 
 def scatter(field, loc_pos, value):
-    x, y, z = loc_pos
-    field[x, y, z] += value
+    ix, iy, iz = loc_pos.astype(int)
+    dx, dy, dz = loc_pos - np.array([ix, iy, iz])
+    # 使用线性插值来更新局部场值
+    if field.ndim == 3:
+        field[ix, iy, iz] += value * (1 - dx) * (1 - dy) * (1 - dz)
+        field[ix + 1, iy, iz] += value * dx * (1 - dy) * (1 - dz)
+        field[ix, iy + 1, iz] += value * (1 - dx) * dy * (1 - dz)
+        field[ix, iy, iz + 1] += value * (1 - dx) * (1 - dy) * dz
+        field[ix + 1, iy + 1, iz] += value * dx * dy * (1 - dz)
+        field[ix, iy + 1, iz + 1] += value * (1 - dx) * dy * dz
+        field[ix + 1, iy, iz + 1] += value * dx * (1 - dy) * dz
+        field[ix + 1, iy + 1, iz + 1] += value * dx * dy * dz
     return field
 
 # 定义电场
@@ -101,7 +138,7 @@ b[:,:,:,2] = 4 # Tesla
 # 初始化粒子
 ## 初始位置
 # electrons_pos = np.random.rand(Np_electrons, 3) * (box_max - box_min) + box_min
-electrons_pos = np.array([[0.0, 0.0, 0.0]])
+electrons_pos = np.random.rand(Np_electrons, 3) * (box_max - box_min) + box_min
 argons_1_pos = np.random.rand(Np_argon_1, 3) * (box_max - box_min) + box_min
 
 ## 初始速度
@@ -139,13 +176,18 @@ for i in range (Nt):
         e_loc = gather(e, loc_pos)
         b_loc = gather(b, loc_pos)
         electrons_vel[ip] = boris_pusher(electrons_vel[ip], e_loc, b_loc, charge/mass, dt)
-        electrons_pos += electrons_vel * dt
+        electrons_pos[ip] += electrons_vel[ip] * dt
+        # electrons_pos = boundary_check(electrons_pos)
         positions_history.append(electrons_pos.copy())
-        print(f"time {i}, vel_x is {electrons_vel[ip][0]}, vel_y is {electrons_vel[ip][1]}, vel_z is {electrons_vel[ip][2]}")
+        times +=dt
 
 
 
 # 统计粒子
+for ip in range(Np_electrons):
+    loc_pos = get_local_pos(electrons_pos[ip])
+    ne_grid = scatter(ne_grid, loc_pos, electrons_charge)
+
 
 
 
