@@ -4,37 +4,41 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # Add this import
 import scipy
 
+# module setting
+np.random.seed(0)
 
-
-# def gather()
-
-
+# physics parameters
 mass = 9.1 * 10e-31 # unit: kg
 # dt = 1e-10 # unit: s
 f = 28e9 #28 GHz
 w = 2 * np.pi * f # unit: rad/s
 charge = 1.6 * 10e-19 # unit: C
 
+
+dt = 5e-12
+print("dt is ", dt, " s")
+
+times = 0 # real time
+Nt = 200 # time step
+
+# puhser
 def boris_pusher(vel, electric_field, magnetic_field, q_m, dt):
     # Boris algorithm for velocity update
     v_minus = vel + electric_field * q_m * dt / 2
     t = magnetic_field * q_m * dt / 2
-    t_mag = np.linalg.norm(t)
     # Cross product for rotation
     v_prime = v_minus + np.cross(v_minus, t)
     s = 2 * t / (1 + np.dot(t, t))
     v_plus = v_minus + np.cross(v_prime, s)
     vel_new = v_plus + electric_field * q_m * dt / 2
-    return vel_new
-
-times = 0 
-Nt = 10
-
-Np_electrons = 2
-Np_argon = 1
-Np_argon_1 = 1
+    return vel_new 
 
 # 定义粒子
+N_species = 3
+Np_electrons = 2
+Np_argon = 2
+Np_argon_1 = 2
+
 electrons_vel = np.zeros((Np_electrons, 3))
 electrons_pos = np.zeros((Np_electrons, 3))
 electrons_mass = 1 # unit: electron_mass
@@ -111,6 +115,35 @@ def scatter(field, loc_pos, value):
         field[ix + 1, iy + 1, iz + 1] += value * dx * dy * dz
     return field
 
+# boundary check
+def boundary_check(pos, vel):
+    """
+    检查粒子边界条件并处理边界碰撞
+    
+    参数:
+    pos: 粒子位置数组 (N, 3)
+    vel: 粒子速度数组 (N, 3)
+    
+    返回:
+    pos: 修正后的位置
+    vel: 修正后的速度
+    """
+    # 检查每个维度的边界
+    for dim in range(3):
+        # 检查下边界
+        mask_lower = pos[:, dim] < box_min[dim]
+        pos[mask_lower, dim] = box_min[dim]
+        vel[mask_lower, dim] = -vel[mask_lower, dim]  # 反射速度
+        
+        # 检查上边界
+        mask_upper = pos[:, dim] > box_max[dim]
+        pos[mask_upper, dim] = box_max[dim]
+        vel[mask_upper, dim] = -vel[mask_upper, dim]  # 反射速度
+    
+    return pos, vel
+    # 如果超出边界，则将其放置到边界上，如果没有超出边界，则不做修改。返回的仍然是一个Pos
+        
+
 # 定义电场
 ex_r = np.zeros((nx,ny,nz))
 ey_r = np.zeros((nx,ny,nz))
@@ -133,6 +166,7 @@ bz = np.zeros((nx,ny,nz))
 b = np.zeros((nx,ny,nz,3))
 
 ## 初始化磁场
+b_mag = 4 # unit: Tesla
 b[:,:,:,2] = 4 # Tesla
 
 # 初始化粒子
@@ -158,16 +192,11 @@ positions_history = []
 vel_history = []
 
 
-b_mag = 4 # Tesla
+
 period = 1 / (charge * b_mag/ mass/ (2 * np.pi))
 print("cycltron frequency is ", 1/period, " Hz")
 print("period is ", period, " s")
 
-Nt = 166
-# dt = period / Nt
-dt = 5e-12
-# Nt = int(period / dt) + 1
-print("dt is ", dt, " s")
 
 
 for i in range (Nt):
@@ -177,9 +206,10 @@ for i in range (Nt):
         b_loc = gather(b, loc_pos)
         electrons_vel[ip] = boris_pusher(electrons_vel[ip], e_loc, b_loc, charge/mass, dt)
         electrons_pos[ip] += electrons_vel[ip] * dt
-        # electrons_pos = boundary_check(electrons_pos)
-        positions_history.append(electrons_pos.copy())
         times +=dt
+    # 边界检查
+    electrons_pos, electrons_vel = boundary_check(electrons_pos, electrons_vel)
+    positions_history.append(electrons_pos.copy())
 
 
 
@@ -188,6 +218,16 @@ for ip in range(Np_electrons):
     loc_pos = get_local_pos(electrons_pos[ip])
     ne_grid = scatter(ne_grid, loc_pos, electrons_charge)
 
+
+charge_total = 0.
+for ix in range(nx):
+    for iy in range(ny):
+        for iz in range(nz):
+            if ne_grid[ix,iy,iz] != 0:
+                charge_total += ne_grid[ix,iy,iz]
+                print(f"ne_grid {ix},{iy},{iz} is {ne_grid[ix,iy,iz]}")
+
+print(f"total charge is {charge_total}")
 
 
 
