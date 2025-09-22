@@ -26,7 +26,7 @@ def gather_field(field_data, loc_pos):
     numba优化的字段插值函数
     
     参数:
-        field_data: np.ndarray - 字段数据 
+        field_data: np.ndarray - 字段数据
         loc_pos: np.ndarray - 局部坐标位置
     
     返回:
@@ -76,7 +76,7 @@ def pos_to_local(pos, box_min, dh):
 
 @numba.njit
 def boris_advance_particles(positions, velocities, e_field, b_field, 
-                          box_min, dh_e, dh_b, charge, mass, dt):
+                          box_min, dh, charge, mass, dt):
     """
     numba优化的Boris推进器
     
@@ -95,13 +95,12 @@ def boris_advance_particles(positions, velocities, e_field, b_field,
     
     for i in range(npar):
         # 获取粒子位置的局部坐标
-        lc_pos_e = pos_to_local(positions[i], box_min, dh_e)
-        lc_pos_b = pos_to_local(positions[i], box_min, dh_b)
+        lc_pos = pos_to_local(positions[i], box_min, dh)
         
         # 插值获取电场和磁场
-        e_part = gather_field(e_field, lc_pos_e)
-        b_part = gather_field(b_field, lc_pos_b)
-
+        e_part = gather_field(e_field, lc_pos)
+        b_part = gather_field(b_field, lc_pos)
+        
         # Boris推进器算法
         ff = charge / mass * dt / 2.0
         
@@ -250,8 +249,7 @@ class Species:
             self.e.field if hasattr(self.e, 'field') else np.zeros((10, 10, 10, 3)),
             self.b.field if hasattr(self.b, 'field') else np.zeros((10, 10, 10, 3)),
             self.world.box_min,
-            self.e.dh,
-            self.b.dh,
+            self.world.dh,
             self.charge,
             self.mass,
             self.world.dt

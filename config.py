@@ -27,10 +27,6 @@ nn_e = np.array([nx_e,ny_e,nz_e])
 box_min = np.array([-0.0625, -0.0625, 0.0])    # 仿真区域最小坐标 [x_min, y_min, z_min]
 box_max = np.array([0.0625, 0.0625, 0.422])    # 仿真区域最大坐标 [x_max, y_max, z_max]
 
-# 时间参数
-dt = 1e-11   # 时间步长 (秒)
-Nt = 5000    # 总时间步数
-
 # 数据文件路径
 data_file = "data.h5"
 
@@ -39,5 +35,12 @@ magnetic_field_dataset = "magnetic_fields"
 electric_field_dataset = "electric_fields"
 ionization_dataset = "ionization"
 excitation_dataset = "excitation"
+
+# 粒子数量
+npar = 10000
+
+# 时间参数
+dt = 1e-11   # 时间步长 (秒)
+Nt = 1000000    # 总时间步数
 
 
