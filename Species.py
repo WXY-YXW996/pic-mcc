@@ -1,61 +1,12 @@
 import numpy as np
 import numba
-from numba import types
+from numba import types, njit, prange
 from numba.typed import Dict
 
 import World
 import Field
 import scipy.constants as constant
 
-
-# 定义numba兼容的粒子数据结构
-@numba.experimental.jitclass([
-    ('pos', numba.float64[:]),
-    ('vel', numba.float64[:])
-])
-class ParticleData:
-    def __init__(self, pos, vel):
-        self.pos = pos
-        self.vel = vel
-
-
-# numba优化的字段插值函数
-@numba.njit
-def gather_field(field_data, loc_pos):
-    """
-    numba优化的字段插值函数
-    
-    参数:
-        field_data: np.ndarray - 字段数据 
-        loc_pos: np.ndarray - 局部坐标位置
-    
-    返回:
-        np.ndarray - 插值后的字段值
-    """
-    i = int(loc_pos[0])
-    di = loc_pos[0] - i
-    
-    j = int(loc_pos[1])
-    dj = loc_pos[1] - j
-    
-    k = int(loc_pos[2])
-    dk = loc_pos[2] - k
-    
-    # 确保索引在有效范围内
-    ni, nj, nk = field_data.shape[0], field_data.shape[1], field_data.shape[2]
-    i = max(0, min(i, ni-2))
-    j = max(0, min(j, nj-2))
-    k = max(0, min(k, nk-2))
-    
-    val = field_data[i,j,k] * (1 - di) * (1 - dj) * (1 - dk) + \
-          field_data[i + 1,j,k] * (di) * (1 - dj) * (1 - dk) + \
-          field_data[i + 1,j + 1,k] * (di) * (dj) * (1 - dk) + \
-          field_data[i,j + 1,k] * (1 - di) * (dj) * (1 - dk) + \
-          field_data[i,j,k + 1] * (1 - di) * (1 - dj) * (dk) + \
-          field_data[i + 1,j,k + 1] * (di) * (1 - dj) * (dk) + \
-          field_data[i + 1,j + 1,k + 1] * (di) * (dj) * (dk) + \
-          field_data[i,j + 1,k + 1] * (1 - di) * (dj) * (dk)
-    return val
 
 
 @numba.njit
@@ -75,18 +26,15 @@ def pos_to_local(pos, box_min, dh):
 
 
 @numba.njit
-def boris_advance_particles(positions, velocities, e_field, b_field, 
-                          box_min, dh_e, dh_b, charge, mass, dt):
+def boris_advance_particles(positions, velocities,e_part, b_part, charge, mass, dt):
     """
     numba优化的Boris推进器
     
     参数:
         positions: np.ndarray - 粒子位置数组 (N, 3)
         velocities: np.ndarray - 粒子速度数组 (N, 3)
-        e_field: np.ndarray - 电场数据
-        b_field: np.ndarray - 磁场数据
-        box_min: np.ndarray - 网格最小边界
-        dh: np.ndarray - 网格间距
+        e_part: np.ndarray - 粒子处的电场数组 (N, 3)
+        b_part: np.ndarray - 粒子处的磁场数组 (N, 3)
         charge: float - 粒子电荷
         mass: float - 粒子质量
         dt: float - 时间步长
@@ -94,20 +42,13 @@ def boris_advance_particles(positions, velocities, e_field, b_field,
     npar = positions.shape[0]
     
     for i in range(npar):
-        # 获取粒子位置的局部坐标
-        lc_pos_e = pos_to_local(positions[i], box_min, dh_e)
-        lc_pos_b = pos_to_local(positions[i], box_min, dh_b)
-        
-        # 插值获取电场和磁场
-        e_part = gather_field(e_field, lc_pos_e)
-        b_part = gather_field(b_field, lc_pos_b)
 
         # Boris推进器算法
         ff = charge / mass * dt / 2.0
         
-        v_minus = velocities[i] + ff * e_part
+        v_minus = velocities[i] + ff * e_part[i]
         
-        t = ff * b_part
+        t = ff * b_part[i]
         
         v_prime = v_minus + np.cross(v_minus, t)
         
@@ -116,7 +57,7 @@ def boris_advance_particles(positions, velocities, e_field, b_field,
         
         v_plus = v_minus + np.cross(v_prime, s)
         
-        velocities[i] = v_plus + ff * e_part
+        velocities[i] = v_plus + ff * e_part[i]
         
         positions[i] += velocities[i] * dt
 
@@ -143,30 +84,30 @@ def apply_boundary_conditions(positions, velocities, box_min, box_max):
                 positions[i, j] = box_max[j]
                 velocities[i, j] = -velocities[i, j]
 
+@numba.njit
+def compute_kinetic_energy_particles(velocities, mass):
+    """
+    计算粒子动能
+    """
+    c = constant.c
+
+    beta = velocities / c
+    beta_squared = np.dot(beta, beta)
+    gamma = 1.0 / np.sqrt(1.0 - beta_squared)
+    kinetic = mass * c * c * (gamma - 1.0) / constant.electron_volt
+
+    return kinetic
+
 
 @numba.njit
-def compute_kinetic_energy(velocities, mass):
+def compute_kinetic_energy(velocities, kinetic, mass):
     """
-    numba优化的动能计算
-    
-    参数:
-        velocities: np.ndarray - 粒子速度数组
-        mass: float - 粒子质量
-    
-    返回:
-        np.ndarray - 粒子动能数组
+    计算粒子动能
     """
     npar = velocities.shape[0]
-    kinetic = np.zeros(npar)
-    c = constant.c
-    
+
     for i in range(npar):
-        beta = velocities[i] / c
-        beta_squared = np.dot(beta, beta)
-        gamma = 1.0 / np.sqrt(1.0 - beta_squared)
-        kinetic[i] = mass * c * c * (gamma - 1.0)
-    
-    return kinetic
+        kinetic[i] = compute_kinetic_energy_particles(velocities[i], mass)
 
 
 @numba.njit
@@ -195,8 +136,8 @@ def compute_momentum(velocities, mass):
 
 
 class Species:
-    def __init__(self, species_name: str, mass: float, charge: float, 
-                 b: Field.Field, e: Field.Field, world: World.World):
+    def __init__(self, species_name: str, mass: float, charge: float, weight: float,
+                 b: Field.Field, e_r: Field.Field, e_i: Field.Field, world: World.World):
         """
         初始化粒子种类对象
         
@@ -209,14 +150,25 @@ class Species:
             world: World.World - 求解域对象
         """
         self.name = species_name
-        self.pos = np.empty((0, 3), dtype=np.float64)
-        self.vel = np.empty((0, 3), dtype=np.float64)
         self.mass = mass
         self.charge = charge
+        self.weight = weight
+
+        self.pos = np.empty((0, 3), dtype=np.float64)
+        self.vel = np.empty((0, 3), dtype=np.float64)
+        self.kinetic = np.empty((0, 1), dtype=np.float64)
+
+        
         self.b = b
-        self.e = e
+        self.e_r = e_r
+        self.e_i = e_i
         self.world = world
-        self.npar = 0        
+        self.npar = 0
+        
+        self.den = Field.Field(self.world.nn)
+        self.den.setBox(self.world.box_min, self.world.box_max)
+        self.den.initializeField(n_components=1)
+        
         
         
     def addParticles(self, pos: np.ndarray, vel: np.ndarray) -> None:
@@ -234,6 +186,10 @@ class Species:
 
         self.pos = np.vstack([self.pos, pos.reshape(1, -1)])
         self.vel = np.vstack([self.vel, vel.reshape(1, -1)])
+        kinetic = compute_kinetic_energy_particles(vel, self.mass)
+        self.kinetic = np.vstack([self.kinetic, np.array([[kinetic]])])
+
+
     
     def advance(self) -> None:
         """
@@ -242,20 +198,32 @@ class Species:
         """
         if self.npar == 0:
             return
-            
-        # 使用numba优化的推进器
+        
+        # 得到磁场
+        self.b_part = self.b.batchGather(self.pos)
+
+        # 得到电场
+        real_time = self.world.time
+        fre = self.world.fre
+        e_r_part = self.e_r.batchGather(self.pos)
+        e_i_part = self.e_i.batchGather(self.pos)
+
+        cosphs = np.cos(fre * np.pi * 2 * real_time)
+        sinphs = np.sin(fre * np.pi * 2 * real_time)
+        self.e_part = e_r_part * cosphs - e_i_part * sinphs
+
+        # self.e_part = self.e.batchGather(self.pos)
+        
         boris_advance_particles(
             self.pos,
             self.vel,
-            self.e.field if hasattr(self.e, 'field') else np.zeros((10, 10, 10, 3)),
-            self.b.field if hasattr(self.b, 'field') else np.zeros((10, 10, 10, 3)),
-            self.world.box_min,
-            self.e.dh,
-            self.b.dh,
+            self.e_part,
+            self.b_part,
             self.charge,
             self.mass,
             self.world.dt
         )
+        self.getKinetic()
             
     def boundary(self) -> None:
         """
@@ -280,8 +248,7 @@ class Species:
         if self.npar == 0:
             return np.array([])
             
-        kinetic = compute_kinetic_energy(self.velocities, self.mass)
-        self.kinetic = kinetic
+        kinetic = compute_kinetic_energy(self.vel, self.kinetic, self.mass)
         return kinetic
     
     def getMomentum(self):
@@ -293,6 +260,22 @@ class Species:
         if self.npar == 0:
             return np.empty((0, 3))
             
-        momentum = compute_momentum(self.velocities, self.mass)
+        momentum = compute_momentum(self.vel, self.mass)
         self.momentum = momentum
         return momentum
+    
+    def computeNumberDensity(self):
+        """
+        计算粒子数密度
+
+        返回: np.ndarray - 粒子数密度数组
+        """
+        if self.npar == 0:
+            return np.zeros(self.world.nn, dtype=np.float64)
+        
+        self.den.initializeField(n_components=1)
+        vals = np.ones((self.npar, 1))
+        self.den.batchScatter(self.pos, vals)
+           
+        self.den.field /= self.den.volume
+        return self.den.field[:, :, :, 0]

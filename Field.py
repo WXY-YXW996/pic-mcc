@@ -4,7 +4,7 @@ import h5py
 
 
 @numba.njit
-def gather_field(field_data, loc_pos):
+def gatherField(field_data, loc_pos):
     """
     numba优化的字段插值函数（三线性插值）
     
@@ -43,7 +43,7 @@ def gather_field(field_data, loc_pos):
 
 
 @numba.njit
-def scatter_field(field_data, loc_pos, val):
+def scatterField(field_data, loc_pos, val):
     """
     numba优化的字段散射函数（三线性散射）
     
@@ -79,7 +79,7 @@ def scatter_field(field_data, loc_pos, val):
 
 
 @numba.njit
-def pos_to_local(pos, box_min, dh):
+def posToLocal(pos, box_min, dh):
     """
     将物理坐标转换为局部网格坐标
     
@@ -95,7 +95,7 @@ def pos_to_local(pos, box_min, dh):
 
 
 @numba.njit
-def batch_gather_field(field_data, positions, box_min, dh):
+def batchGatherField(field_data, positions, box_min, dh):
     """
     批量字段插值函数
     
@@ -112,14 +112,14 @@ def batch_gather_field(field_data, positions, box_min, dh):
     result = np.zeros((n_particles, 3))
     
     for i in range(n_particles):
-        loc_pos = pos_to_local(positions[i], box_min, dh)
-        result[i] = gather_field(field_data, loc_pos)
+        loc_pos = posToLocal(positions[i], box_min, dh)
+        result[i] = gatherField(field_data, loc_pos)
     
     return result
 
 
 @numba.njit
-def batch_scatter_field(field_data, positions, values, box_min, dh):
+def batchScatterField(field_data, positions, values, box_min, dh):
     """
     批量字段散射函数
     
@@ -133,113 +133,36 @@ def batch_scatter_field(field_data, positions, values, box_min, dh):
     n_particles = positions.shape[0]
     
     for i in range(n_particles):
-        loc_pos = pos_to_local(positions[i], box_min, dh)
-        scatter_field(field_data, loc_pos, values[i])
-
-
+        loc_pos = posToLocal(positions[i], box_min, dh)
+        scatterField(field_data, loc_pos, values[i])
+        
 @numba.njit
-def field_gradient(field_data, loc_pos, dh):
+def computerVolume(nn, dh):
     """
-    计算字段梯度（数值微分）
+    计算网格体积
     
     参数:
-        field_data: np.ndarray - 字段数据 (ni, nj, nk, 3)
-        loc_pos: np.ndarray - 局部坐标位置 (3,)
+        nn: tuple - 网格点数 (nx, ny, nz)
         dh: np.ndarray - 网格间距 (3,)
     
     返回:
-        np.ndarray - 梯度张量 (3, 3) [grad_x, grad_y, grad_z]
+        float - 网格体积
     """
-    gradient = np.zeros((3, 3))
-    eps = 0.5  # 有限差分步长
     
-    for dim in range(3):
-        # 前向差分
-        pos_forward = loc_pos.copy()
-        pos_forward[dim] += eps
-        field_forward = gather_field(field_data, pos_forward)
-        
-        # 后向差分
-        pos_backward = loc_pos.copy()
-        pos_backward[dim] -= eps
-        field_backward = gather_field(field_data, pos_backward)
-        
-        # 中心差分
-        gradient[:, dim] = (field_forward - field_backward) / (2.0 * eps * dh[dim])
-    
-    return gradient
+    volume = np.zeros((*nn, 1), dtype=np.float64)
+    nx, ny, nz = nn
+    for ix in range(nx):
+        for iy in range(ny):
+            for iz in range(nz):
+                volume[ix,iy,iz] = dh[0] * dh[1] * dh[2]
+                if (ix == 0 or ix == nx-1):
+                    volume[ix,iy,iz,0] *= 0.5
+                if (iy == 0 or iy == ny-1):
+                    volume[ix,iy,iz,0] *= 0.5
+                if (iz == 0 or iz == nz-1):
+                    volume[ix,iy,iz,0] *= 0.5
+    return volume
 
-
-@numba.njit
-def field_divergence(field_data, loc_pos, dh):
-    """
-    计算字段散度
-    
-    参数:
-        field_data: np.ndarray - 字段数据 (ni, nj, nk, 3)
-        loc_pos: np.ndarray - 局部坐标位置 (3,)
-        dh: np.ndarray - 网格间距 (3,)
-    
-    返回:
-        float - 散度值
-    """
-    gradient = field_gradient(field_data, loc_pos, dh)
-    return gradient[0, 0] + gradient[1, 1] + gradient[2, 2]
-
-
-@numba.njit
-def field_curl(field_data, loc_pos, dh):
-    """
-    计算字段旋度
-    
-    参数:
-        field_data: np.ndarray - 字段数据 (ni, nj, nk, 3)
-        loc_pos: np.ndarray - 局部坐标位置 (3,)
-        dh: np.ndarray - 网格间距 (3,)
-    
-    返回:
-        np.ndarray - 旋度向量 (3,)
-    """
-    gradient = field_gradient(field_data, loc_pos, dh)
-    curl = np.zeros(3)
-    
-    # curl = ∇ × F
-    curl[0] = gradient[2, 1] - gradient[1, 2]  # ∂Fz/∂y - ∂Fy/∂z
-    curl[1] = gradient[0, 2] - gradient[2, 0]  # ∂Fx/∂z - ∂Fz/∂x
-    curl[2] = gradient[1, 0] - gradient[0, 1]  # ∂Fy/∂x - ∂Fx/∂y
-    
-    return curl
-
-
-@numba.njit
-def smooth_field(field_data, iterations=1):
-    """
-    字段平滑处理（简单的邻域平均）
-    
-    参数:
-        field_data: np.ndarray - 字段数据 (ni, nj, nk, 3)
-        iterations: int - 平滑迭代次数
-    """
-    ni, nj, nk, ncomp = field_data.shape
-    temp_field = np.zeros_like(field_data)
-    
-    for _ in range(iterations):
-        for i in range(1, ni-1):
-            for j in range(1, nj-1):
-                for k in range(1, nk-1):
-                    for c in range(ncomp):
-                        # 27点邻域平均
-                        sum_val = 0.0
-                        count = 0
-                        for di in range(-1, 2):
-                            for dj in range(-1, 2):
-                                for dk in range(-1, 2):
-                                    sum_val += field_data[i+di, j+dj, k+dk, c]
-                                    count += 1
-                        temp_field[i, j, k, c] = sum_val / count
-        
-        # 复制回原数组
-        field_data[:] = temp_field[:]
 
 
 class BaseField:
@@ -270,6 +193,7 @@ class BaseField:
         self.box_min = np.asarray(box_min, dtype=np.float64)
         self.box_max = np.asarray(box_max, dtype=np.float64)
         self.dh = (self.box_max - self.box_min) / (np.array(self.nn) - 1)
+        self.volume = computerVolume(self.nn, self.dh)
     
     def XToL(self, pos: np.array):
         """
@@ -283,8 +207,8 @@ class BaseField:
         """
         if self.box_min is None or self.dh is None:
             raise ValueError("必须先调用setBox()设置网格边界")
-        return pos_to_local(pos, self.box_min, self.dh)
-
+        return posToLocal(pos, self.box_min, self.dh)
+    
 
 class Field(BaseField):
     def __init__(self, nn):
@@ -297,7 +221,7 @@ class Field(BaseField):
         super(Field, self).__init__(nn)
         self.field = None
         
-    def initialize_field(self, n_components=3):
+    def initializeField(self, n_components=3):
         """
         初始化字段数据数组
         
@@ -343,7 +267,8 @@ class Field(BaseField):
         """
         if self.field is None:
             raise ValueError("字段数据未初始化")
-        return gather_field(self.field, loc_pos)
+        return gatherField(self.field, loc_pos)
+    
     
     def scatter(self, loc_pos, val):
         """
@@ -355,9 +280,9 @@ class Field(BaseField):
         """
         if self.field is None:
             raise ValueError("字段数据未初始化")
-        scatter_field(self.field, loc_pos, val)
+        scatterField(self.field, loc_pos, val)
     
-    def batch_gather(self, positions):
+    def batchGather(self, positions):
         """
         批量插值字段值
         
@@ -372,9 +297,9 @@ class Field(BaseField):
         if self.box_min is None or self.dh is None:
             raise ValueError("必须先调用setBox()设置网格边界")
         
-        return batch_gather_field(self.field, positions, self.box_min, self.dh)
-    
-    def batch_scatter(self, positions, values):
+        return batchGatherField(self.field, positions, self.box_min, self.dh)
+
+    def batchScatter(self, positions, values):
         """
         批量散射值到字段
         
@@ -386,68 +311,9 @@ class Field(BaseField):
             raise ValueError("字段数据未初始化")
         if self.box_min is None or self.dh is None:
             raise ValueError("必须先调用setBox()设置网格边界")
-        
-        batch_scatter_field(self.field, positions, values, self.box_min, self.dh)
+            
+        batchScatterField(self.field, positions, values, self.box_min, self.dh)
     
-    def get_gradient(self, pos):
-        """
-        计算指定位置的字段梯度
-        
-        参数:
-            pos: np.ndarray - 物理位置 (3,)
-        
-        返回:
-            np.ndarray - 梯度张量 (3, 3)
-        """
-        if self.field is None:
-            raise ValueError("字段数据未初始化")
-        
-        loc_pos = self.XToL(pos)
-        return field_gradient(self.field, loc_pos, self.dh)
-    
-    def get_divergence(self, pos):
-        """
-        计算指定位置的字段散度
-        
-        参数:
-            pos: np.ndarray - 物理位置 (3,)
-        
-        返回:
-            float - 散度值
-        """
-        if self.field is None:
-            raise ValueError("字段数据未初始化")
-        
-        loc_pos = self.XToL(pos)
-        return field_divergence(self.field, loc_pos, self.dh)
-    
-    def get_curl(self, pos):
-        """
-        计算指定位置的字段旋度
-        
-        参数:
-            pos: np.ndarray - 物理位置 (3,)
-        
-        返回:
-            np.ndarray - 旋度向量 (3,)
-        """
-        if self.field is None:
-            raise ValueError("字段数据未初始化")
-        
-        loc_pos = self.XToL(pos)
-        return field_curl(self.field, loc_pos, self.dh)
-    
-    def smooth(self, iterations=1):
-        """
-        对字段进行平滑处理
-        
-        参数:
-            iterations: int - 平滑迭代次数
-        """
-        if self.field is None:
-            raise ValueError("字段数据未初始化")
-        
-        smooth_field(self.field, iterations)
     
     def clear(self):
         """
@@ -455,8 +321,8 @@ class Field(BaseField):
         """
         if self.field is not None:
             self.field.fill(0.0)
-    
-    def get_field_stats(self):
+      
+    def getFieldStats(self):
         """
         获取字段统计信息
         
@@ -474,3 +340,4 @@ class Field(BaseField):
             'std': np.std(self.field),
             'norm': np.linalg.norm(self.field)
         }
+        

@@ -1,3 +1,4 @@
 *.h5
 *.dat
 \__pycache__
+\vtk_output
